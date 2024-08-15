@@ -18,21 +18,15 @@ import (
 
 type State int
 
-const (
-	Pending State = iota
-	Scheduled
-	Running
-	Completed
-	Failed
-)
-
 type Task struct {
 	ID            uuid.UUID
+	ContainerID   string
 	Name          string
 	State         State
 	Image         string
-	Memory        int
-	Disk          int
+	Cpu           float64
+	Memory        int64
+	Disk          int64
 	ExposedPorts  nat.PortSet
 	PortBindings  map[string]string
 	RestartPolicy string
@@ -52,7 +46,7 @@ type Config struct {
 	AttachStdin   bool
 	AttachStdout  bool
 	AttachStderr  bool
-	ExposedProts  nat.PortSet
+	ExposedPorts  nat.PortSet
 	Cmd           []string
 	Image         string
 	Cpu           float64
@@ -60,6 +54,18 @@ type Config struct {
 	Disk          int64
 	Env           []string
 	RestartPolicy string
+}
+
+func NewConfig(t *Task) *Config {
+	return &Config{
+		Name:          t.Name,
+		ExposedPorts:  t.ExposedPorts,
+		Image:         t.Image,
+		Cpu:           t.Cpu,
+		Memory:        t.Memory,
+		Disk:          t.Disk,
+		RestartPolicy: t.RestartPolicy,
+	}
 }
 
 type Docker struct {
@@ -72,6 +78,14 @@ type DockerResult struct {
 	Action      string
 	ContainerId string
 	Result      string
+}
+
+func NewDocker(c *Config) *Docker {
+	dc, _ := client.NewClientWithOpts(client.FromEnv)
+	return &Docker{
+		Client: dc,
+		Config: *c,
+	}
 }
 
 func (d *Docker) Run() DockerResult {
@@ -99,7 +113,7 @@ func (d *Docker) Run() DockerResult {
 		Image:        d.Config.Image,
 		Tty:          false,
 		Env:          d.Config.Env,
-		ExposedPorts: d.Config.ExposedProts,
+		ExposedPorts: d.Config.ExposedPorts,
 	}
 
 	hc := container.HostConfig{
