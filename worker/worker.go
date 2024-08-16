@@ -18,6 +18,22 @@ type Worker struct {
 	TaskCount int
 }
 
+func (w *Worker) GetTasks() []*task.Task {
+	tasks := []*task.Task{}
+	for _, t := range w.Db {
+		tasks = append(tasks, t)
+	}
+	return tasks
+}
+
+func (w *Worker) GetTask(taskID uuid.UUID) (*task.Task, error) {
+	task, ok := w.Db[taskID]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("No task with ID %v found", taskID))
+	}
+	return task, nil
+}
+
 func (w *Worker) CollectStats() {
 	fmt.Println("I will collect stats")
 }
@@ -32,6 +48,7 @@ func (w *Worker) RunTask() task.DockerResult {
 
 	// convert to task type
 	taskQueued := t.(task.Task)
+	fmt.Printf("Found task in queue: %v:\n", taskQueued)
 
 	// retrieve task from db
 	taskPersisted := w.Db[taskQueued.ID]

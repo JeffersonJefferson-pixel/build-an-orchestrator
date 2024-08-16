@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type State int
-
 type Task struct {
 	ID            uuid.UUID
 	ContainerID   string
