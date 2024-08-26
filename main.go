@@ -27,6 +27,7 @@ func main() {
 
 	fmt.Println("Running tasks")
 	go runTasks(&w)
+	go w.CollectStats()
 
 	fmt.Println("Starting api")
 	api.Start()
