@@ -5,11 +5,14 @@ import (
 	"cube/task"
 	"cube/worker"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/docker/go-connections/nat"
 	"github.com/golang-collections/collections/queue"
 	"github.com/google/uuid"
 )
@@ -76,7 +79,7 @@ func (m *Manager) updateTasks() {
 			m.TaskDb[t.ID].StartTime = t.StartTime
 			m.TaskDb[t.ID].FinishTime = t.FinishTime
 			m.TaskDb[t.ID].ContainerID = t.ContainerID
-
+			m.TaskDb[t.ID].HostPorts = t.HostPorts
 		}
 	}
 }
@@ -192,4 +195,89 @@ func (m *Manager) GetTasks() []*task.Task {
 		tasks = append(tasks, t)
 	}
 	return tasks
+}
+
+// check health of task.
+func (m *Manager) checkTaskHealth(t task.Task) error {
+	log.Printf("Calling health check for task %s: %s\n", t.ID, t.HealthCheck)
+
+	w := m.TaskWorkerMap[t.ID]
+	hostPort := getHostPort(t.HostPorts)
+	if hostPort == nil {
+		log.Printf("task %s has no host port", t.ID)
+		return nil
+	}
+	// get worker ip.
+	worker := strings.Split(w, ":")
+	// build health check url.
+	url := fmt.Sprintf("http://%s:%s%s", worker[0], *hostPort, t.HealthCheck)
+	log.Printf("Calling health check for task %s: %s\n", t.ID, url)
+	resp, err := http.Get(url)
+	// connection error
+	if err != nil {
+		msg := fmt.Sprintf("Error connecting to health check %s", url)
+		log.Print(msg)
+		return errors.New(msg)
+	}
+
+	// non-200 response.
+	if resp.StatusCode != http.StatusOK {
+		msg := fmt.Sprintf("Error health check for task %s return non-200 status code: %v\n", t.ID, resp.StatusCode)
+		log.Println(msg)
+		return errors.New(msg)
+	}
+
+	log.Printf("Task %s health check response: %v\n", t.ID, resp.StatusCode)
+
+	return nil
+}
+
+func getHostPort(ports nat.PortMap) *string {
+	for k := range ports {
+		return &ports[k][0].HostPort
+	}
+	return nil
+}
+
+func (m *Manager) DoHealthChecks() {
+	for {
+		log.Printf("Performing task health check")
+		m.doHealthChecks()
+		log.Println("Task health checks completed")
+		log.Println("Sleeping for 60 seconds")
+		time.Sleep(60 * time.Second)
+	}
+}
+
+func (m *Manager) doHealthChecks() {
+	// iterate over tasks in manager.
+	for _, t := range m.GetTasks() {
+		// check task health if it is running.
+		if t.State == task.Running && t.RestartCount < 3 {
+			err := m.checkTaskHealth(*t)
+			if err != nil {
+				if t.RestartCount < 3 {
+					m.restartTask(t)
+				}
+			}
+		} else if t.State == task.Failed && t.RestartCount < 3 {
+			// restart task if it failed.
+			m.restartTask(t)
+		}
+	}
+}
+
+func (m *Manager) restartTask(t *task.Task) {
+	t.State = task.Scheduled
+	t.RestartCount++
+	m.TaskDb[t.ID] = t
+
+	te := task.TaskEvent{
+		ID:        uuid.New(),
+		State:     task.Running,
+		Timestamp: time.Now(),
+		Task:      *t,
+	}
+
+	m.AddTask(te)
 }
