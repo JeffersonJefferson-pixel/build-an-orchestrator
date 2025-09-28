@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cube/node"
 	"cube/scheduler"
+	"cube/store"
 	"cube/task"
 	"cube/worker"
 	"encoding/json"
@@ -21,7 +22,7 @@ import (
 
 type Manager struct {
 	Pending       queue.Queue
-	TaskDb        map[uuid.UUID]*task.Task
+	TaskDb        store.Store
 	EventDb       map[uuid.UUID]*task.TaskEvent
 	Workers       []string
 	WorkerTaskMap map[string][]uuid.UUID // mapping between worker to list of tasks that are assigned to it.
@@ -73,20 +74,27 @@ func (m *Manager) updateTasks() {
 		for _, t := range tasks {
 			log.Printf("Attempting to update task %v\n", t.ID)
 
-			_, ok := m.TaskDb[t.ID]
+			result, err := m.TaskDb.Get(t.ID.String())
+			if err != nil {
+				log.Printf("[manager] %s\n", err)
+				continue
+			}
+
+			taskPersisted, ok := result.(*task.Task)
 			if !ok {
-				log.Printf("Task with ID %s not found\n", t.ID)
-				return
+				log.Printf("cannot convert result %v to task.Task type\n", result)
 			}
 
-			if m.TaskDb[t.ID].State != t.State {
-				m.TaskDb[t.ID].State = t.State
+			if taskPersisted.State != t.State {
+				taskPersisted.State = t.State
 			}
 
-			m.TaskDb[t.ID].StartTime = t.StartTime
-			m.TaskDb[t.ID].FinishTime = t.FinishTime
-			m.TaskDb[t.ID].ContainerID = t.ContainerID
-			m.TaskDb[t.ID].HostPorts = t.HostPorts
+			taskPersisted.StartTime = t.StartTime
+			taskPersisted.FinishTime = t.FinishTime
+			taskPersisted.ContainerID = t.ContainerID
+			taskPersisted.HostPorts = t.HostPorts
+
+			m.TaskDb.Put(taskPersisted.ID.String(), taskPersisted)
 		}
 	}
 }
@@ -116,7 +124,16 @@ func (m *Manager) SendWork() {
 		// check task that is assigned to worker.
 		taskWoker, ok := m.TaskWorkerMap[te.Task.ID]
 		if ok {
-			persistedTask := m.TaskDb[te.Task.ID]
+			result, err := m.TaskDb.Get(te.Task.ID.String())
+			if err != nil {
+				log.Printf("unable to schedule task: %s", err)
+				return
+			}
+			persistedTask, ok := result.(*task.Task)
+			if !ok {
+				log.Printf("unable to convert task to task.Task type")
+				return
+			}
 			// stop task.
 			if te.State == task.Completed && task.ValidStateTransition(persistedTask.State, te.State) {
 				m.stopTask(taskWoker, te.Task.ID.String())
@@ -140,7 +157,7 @@ func (m *Manager) SendWork() {
 		m.TaskWorkerMap[t.ID] = w.Name
 
 		t.State = task.Scheduled
-		m.TaskDb[t.ID] = &t
+		m.TaskDb.Put(t.ID.String(), &t)
 
 		// encode task event as json.
 		data, err := json.Marshal(te)
@@ -196,8 +213,7 @@ func (m *Manager) AddTask(te task.TaskEvent) {
 }
 
 // create an instance of manager.
-func New(workers []string, schedulerType string) *Manager {
-	taskDb := make(map[uuid.UUID]*task.Task)
+func New(workers []string, schedulerType string, dbType string) *Manager {
 	eventDb := make(map[uuid.UUID]*task.TaskEvent)
 	workerTaskMap := make(map[string][]uuid.UUID)
 	taskWorkerMap := make(map[uuid.UUID]string)
@@ -222,25 +238,36 @@ func New(workers []string, schedulerType string) *Manager {
 		s = &scheduler.RoundRobin{Name: "roundrobin"}
 	}
 
-	return &Manager{
+	m := Manager{
 		Pending:       *queue.New(),
 		Workers:       workers,
-		TaskDb:        taskDb,
 		EventDb:       eventDb,
 		WorkerTaskMap: workerTaskMap,
 		TaskWorkerMap: taskWorkerMap,
 		WorkerNodes:   nodes,
 		Scheduler:     s,
 	}
+
+	var ts store.Store
+	switch dbType {
+	case "memory":
+		ts = store.NewInMemoryTaskStore()
+	}
+
+	m.TaskDb = ts
+
+	return &m
 }
 
 // get list of the tasks from manager.
 func (m *Manager) GetTasks() []*task.Task {
-	tasks := []*task.Task{}
-	for _, t := range m.TaskDb {
-		tasks = append(tasks, t)
+	tasks, err := m.TaskDb.List()
+	if err != nil {
+		log.Printf("error getting list of tasks: %v\n", err)
+		return nil
 	}
-	return tasks
+
+	return tasks.([]*task.Task)
 }
 
 // check health of task.
@@ -316,7 +343,7 @@ func (m *Manager) doHealthChecks() {
 func (m *Manager) restartTask(t *task.Task) {
 	t.State = task.Scheduled
 	t.RestartCount++
-	m.TaskDb[t.ID] = t
+	m.TaskDb.Put(t.ID.String(), t)
 
 	te := task.TaskEvent{
 		ID:        uuid.New(),

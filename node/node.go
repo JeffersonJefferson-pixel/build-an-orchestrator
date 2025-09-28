@@ -38,7 +38,7 @@ func (n *Node) GetStats() (*stats.Stats, error) {
 	url := fmt.Sprintf("%s/stats", n.Api)
 	resp, err := utils.HTTPWithRetry(http.Get, url)
 	if err != nil {
-		msg := fmt.Sprintf("Unable to connect to %v. Permanent fialure.\n")
+		msg := fmt.Sprintf("Unable to connect to %v. Permanent fialure.\n", err)
 		log.Println(msg)
 		return nil, errors.New(msg)
 	}
