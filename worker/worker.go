@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"cube/stats"
 	"cube/task"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ type Worker struct {
 	Queue     queue.Queue
 	Db        map[uuid.UUID]*task.Task
 	TaskCount int
-	Stats     *Stats
+	Stats     *stats.Stats
 }
 
 func (w *Worker) GetTasks() []*task.Task {
@@ -38,7 +39,7 @@ func (w *Worker) GetTask(taskID uuid.UUID) (*task.Task, error) {
 func (w *Worker) CollectStats() {
 	for {
 		log.Println("Collecting stats")
-		w.Stats = GetStats()
+		w.Stats = stats.GetStats()
 		w.Stats.TaskCount = w.TaskCount
 		time.Sleep(15 * time.Second)
 	}
